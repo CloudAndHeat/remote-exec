@@ -14,6 +14,8 @@ testfiles = [
   'notify-before-not_if_remote',
   'notify-before-only_if_remote',
   'via-private-key',
+  'multi-with-input',
+  'multi-ssh-connection',
 ]
 
 testfiles.each do |f|
@@ -180,6 +182,17 @@ remote_execute 'only_if_remote blocks before notifications' do
   notifies :create, 'file[/tmp/should-not-exist]', :before
 end
 
+remote_execute 'not_if_remote and only_if_remote block following notifications for multiple targets' do
+  command 'touch /tmp/should-not-exist'
+  user 'testuser'
+  address((1..2).map { |x| "127.1.0.#{x}" })
+  password node['test-cookbook']['testuser']['password']
+  password node['test-cookbook']['testuser']['password']
+  not_if_remote 'echo $SSH_CONNECTION | grep 127.1.0.2'
+  only_if_remote 'echo $SSH_CONNECTION | grep -v 127.1.0.1'
+  notifies :create, 'file[/tmp/should-not-exist]', :immediately
+end
+
 # Check successful before notifications
 remote_execute 'with before notification' do
   command 'test -f /tmp/notify-before'
@@ -288,3 +301,24 @@ remote_execute 'touch /tmp/via-private-key' do
   )
   stream_output false
 end
+
+# Various checks around concurrency
+
+remote_execute 'tee -a /tmp/multi-with-input' do
+  user 'testuser'
+  address ['127.0.0.1', '127.0.0.10']
+  password node['test-cookbook']['testuser']['password']
+  input "input line\n"
+end
+
+# Check that guards are evaluated independently (the InSpec check verifies the
+# content of the file)
+remote_execute 'echo "$SSH_CONNECTION" | tee -a /tmp/multi-ssh-connection > /dev/null' do
+  user 'testuser'
+  address((1..10).map { |x| "127.1.0.#{x}" })
+  password node['test-cookbook']['testuser']['password']
+  not_if_remote 'echo $SSH_CONNECTION | grep 127.1.0.2'
+  only_if_remote 'echo $SSH_CONNECTION | grep -P "127\.1\.0\.([2468]|1[^0])"'
+end
+
+include_recipe 'test::error_handling'

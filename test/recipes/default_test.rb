@@ -50,3 +50,22 @@ end
 describe file('/tmp/via-private-key') do
   it { should exist }
 end
+
+describe file('/tmp/multi-with-input') do
+  it { should exist }
+  its('content') { should eq "input line\ninput line\n" }
+end
+
+describe file('/tmp/multi-ssh-connection') do
+  it { should exist }
+  its('content') { should include '127.1.0.1' }
+  its('content') { should_not include '127.1.0.2' }
+  its('content') { should_not include '127.1.0.3' }
+  its('content') { should include '127.1.0.4' }
+  its('content') { should_not include '127.1.0.5' }
+  its('content') { should include '127.1.0.6' }
+  its('content') { should_not include '127.1.0.7' }
+  its('content') { should include '127.1.0.8' }
+  its('content') { should_not include '127.1.0.9' }
+  its('content') { should_not include '127.1.0.10' }
+end

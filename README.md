@@ -16,7 +16,7 @@ Syntax:
 
 ```ruby
 remote_execute 'name' do
-  address           String          #
+  address           String, Array   #
   command           String, Array   # default: name
   returns           Integer, Array  #
   password          String          #
@@ -29,9 +29,12 @@ remote_execute 'name' do
   sensitive_command boolean         # default: sensitive
   sensitive_output  boolean         # default: sensitive
   stream_output     boolean         # default: true
-  max_buffer_size   Integer         # default: 1 Mi (= 1048576)
+  max_buffer_size   Integer         # default: 1 Mi (= 1048576) divided by maximum number of concurrent connections
   max_line_length   Integer         # default: 4 ki (= 4096)
   options           Hash            #
+  concurrent_connections Integer    #
+  max_connection_retries Integer    # default: 3
+  print_summary     boolean         #
 
   not_if_remote String, Array, Hash # Remotely executed shell guard command like not_if
   only_if_remote String, Array, Hash # Remotely executed shell guard command like only_if
@@ -59,7 +62,7 @@ The resource has the following properties:
 
 * `returns`: The return value for a command. This may be an array of accepted values. An exception is raised when the return value does not match. Default value: `0`.
 
-* `address`: The address of the remote server.
+* `address`: The address of one or more remote servers to connect to.
 
 * `user`: The username used to connect to the remote server. Defaults to the user name under which the chef-client is running.
 
@@ -100,9 +103,18 @@ The resource has the following properties:
   shown in real-time (except for line-buffering). This does not apply to guard
   commands (the output of guard commands is only in the debug log).
 
+  The output is prefixed with the address of the remote server in square
+  brackets on each line.
+
 * `max_buffer_size`: Restrict the maximum number of codepoints in the Ruby
   string to buffer for non-streaming commands. If the number is exceeded, older
   data will be discarded (but the resource will continue to execute).
+
+  The default is 1 Mi (= 1048576) divided by the maximum number of concurrent
+  connections, so that the maximum buffer used never exceeds 1 MiB. The maximum
+  number of concurrent connections is the limit given via
+  `concurrent_connections` or the number of hosts passed via addres, whichever
+  is lower.
 
   Setting this can cause:
 
@@ -130,6 +142,22 @@ The resource has the following properties:
   duplication). This allows to pass e.g. `password` through the (sensitive)
   property instead of through the (non-sensitive) `options` hash.
 
+* `concurrent_connections`: Sets the maximum number of concurrent executions
+  which will run at the same time. If unset, an unlimited number of concurrent
+  connections is allowed.
+
+* `max_connection_retries`: How often the resource will re-try connecting to a
+  host. A host which fails to connect does not block execution on the other
+  hosts (except if a guard clause is present).
+
+  Hosts failing to connect raise an error after all other hosts have completed
+  execution.
+
+* `print_summary`: If true, a summary of exit codes is printed for the main
+  commands executed on all targets.
+
+  The default value is true if there is more than one target address given or
+  if streaming of output is disabled, false otherwise.
 
 #### Guards
 
