@@ -14,6 +14,8 @@
 # limitations under the License.
 #
 
+require 'net/ssh/multi'
+
 resource_name :remote_execute
 default_action :run
 
@@ -24,16 +26,29 @@ property :returns, Array, default: [0], coerce: proc { |v| v.is_a?(Integer) ? [v
 property :timeout, Integer, default: 60
 property :user, String
 property :password, String, sensitive: true
-property :address, String, required: true
+property :address, Array, required: true, coerce: proc { |v| v.is_a?(String) ? [v] : v }, callbacks: {
+  'must be Array of Strings' => ->(a) { a.all? { |v| v.is_a?(String) } },
+}
 property :input, String
 property :interactive, [TrueClass, FalseClass], default: false
 property :request_pty, [TrueClass, FalseClass], default: false
 property :sensitive_output, [TrueClass, FalseClass], default: lazy { sensitive }
 property :sensitive_command, [TrueClass, FalseClass], default: lazy { sensitive }
 property :live_stream, [TrueClass, FalseClass], default: false
-property :max_buffer_size, Integer, default: 1048576 # approx. 1 MiB
+property :max_buffer_size, Integer, default: lazy {
+  base_limit = 1048576
+  max_concurrency = concurrent_connections
+  max_concurrency = address.length if max_concurrency.nil? || address.length < max_concurrency
+  max_concurrency = 1 if max_concurrency < 1
+  base_limit / max_concurrency
+}
 property :max_line_length, Integer, default: 4096 # 4 kiB
 property :options, Hash, coerce: proc { |v| RemoteExec::Validation.symbolize_options(v) }
+property :concurrent_connections, Integer, callbacks: {
+  'must be positive Integer' => ->(v) { v >= 1 },
+}
+property :max_connection_retries, Integer, default: 3
+property :print_summary, [TrueClass, FalseClass], default: lazy { address.length > 1 || !live_stream }
 
 property :not_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::Validation.coerce_guard_config(v, sensitive) }, callbacks: RemoteExec::Validation.guard_config_checks
 property :only_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::Validation.coerce_guard_config(v, sensitive) }, callbacks: RemoteExec::Validation.guard_config_checks
@@ -55,91 +70,122 @@ action :run do
   end
 
   ssh_session do |session|
-    if !new_resource.not_if_remote.nil? && !new_resource.not_if_remote.empty?
-      result = !eval_guard(session, new_resource.not_if_remote)
-      Chef::Log.info("#{new_resource}: evaluated not_if_remote #{masked_command(new_resource.not_if_remote.fetch(:command).inspect, new_resource.not_if_remote.fetch(:sensitive_command))}. may proceed = #{result}")
-      break unless result
-    end
-    if !new_resource.only_if_remote.nil? && !new_resource.only_if_remote.empty?
-      result = eval_guard(session, new_resource.only_if_remote)
-      Chef::Log.info("#{new_resource}: evaluated only_if_remote #{masked_command(new_resource.only_if_remote.fetch(:command).inspect, new_resource.only_if_remote.fetch(:sensitive_command))}. may proceed = #{result}")
-      break unless result
-    end
+    remaining_servers = evaluate_remote_guards(session)
 
-    descriptor = "#{masked_command(new_resource.command.inspect, new_resource.sensitive_command)} on server #{new_resource.address.inspect} as #{new_resource.user.inspect}"
+    # If there are no servers left, we have to break out here; otherwise, there
+    # is a converge_by block in the execution path, which causes the resource to
+    # be "changed". That, in turn, triggers unwanted notifications.
+    break if remaining_servers.empty?
 
-    converge_by("execute #{descriptor}") do
-      if new_resource.live_stream
-        output_prefix = "[#{new_resource.address}] "
-        nlines = 0
-        exit_code, exit_signal = line_buffered_exec(session,
-                                                    new_resource.command,
-                                                    command_options) do |_stream, line|
-          line << "\n" unless line.end_with?("\n")
-          nlines += 1
-          unless new_resource.sensitive_output
-            # print an empty line before the first line for alignment, but only
-            # if we actually receive output
-            puts if nlines == 1
-            # using print instead of puts, since line is forced to contain a \n
-            # above.
-            print "#{output_prefix}#{line}"
-          end
-        end
+    messages = ["execute #{formatter.masked_command(new_resource.command, new_resource.sensitive_command)} on server #{remaining_servers.map(&:host)} as #{new_resource.user.inspect}"]
+    converge_by(messages) do
+      subsession = session.on(*remaining_servers)
+      result_items = if new_resource.live_stream
+                       ssh_exec_streamed(subsession,
+                                         new_resource.command,
+                                         sensitive_output: new_resource.sensitive_output,
+                                         sensitive_command: new_resource.sensitive_command,
+                                         **command_options)
+                     else
+                       ssh_exec(subsession, new_resource.command, command_options)
+                     end
 
-        if new_resource.sensitive_output
-          puts "[#{fqdn}: #{nlines} line(s) of sensitive output suppressed (disable by setting sensitive_output to false or :guards)]"
-        end
+      error_parts = formatter.compose_exception_message(
+        result_items,
+        new_resource.command,
+        new_resource.sensitive_command,
+        new_resource.sensitive_output,
+        new_resource.returns
+      )
 
-        stdout = nil
-        stderr = nil
-      else
-        stdout, stderr, exit_code, exit_signal = ssh_exec(session,
-                                                          new_resource.command,
-                                                          command_options)
+      unless error_parts.empty?
+        error_parts.insert(0, 'Remote process execution failed for one or more targets')
+        raise error_parts.join("\n")
       end
 
-      success = new_resource.returns.include?(exit_code)
-      unless success
-        error_parts = [
-          "Expected process to exit with #{new_resource.returns.inspect}, but received #{exit_code} (signal: #{exit_signal})",
-        ]
-        if new_resource.sensitive_output
-          error_parts.push(
-            'STDOUT/STDERR suppressed for sensitive resource'
-          )
-        elsif !stdout.nil? || !stderr.nil?
-          error_parts.push(
-            "---- Begin output of #{descriptor} ----",
-            "STDOUT: #{stdout}",
-            "STDERR: #{stderr}",
-            "---- End output of #{descriptor}----"
-          )
+      result_items.each_pair do |server, result_item|
+        if new_resource.print_summary
+          messages.push("  #{server.host}: #{result_item.state_to_s}")
         end
-        raise error_parts.join("\n")
       end
     end
   end
 end
 
 action_class do
-  def eval_guard(session, guard_command_config)
-    guard_command_config = guard_command_config.dup
-    command = guard_command_config.delete(:command)
-    guard_command_config.delete(:sensitive_command)
-    eval_command(session, command, guard_command_config)
+  def formatter
+    @formatter ||= RemoteExec::Formatter.new
   end
 
-  def eval_command(session, command, sensitive_output: false, **options)
-    rc = ssh_exec(session, command, options)
-    unless sensitive_output
-      Chef::Log.debug("eval_command: stdout: #{rc[0]}")
-      Chef::Log.debug("eval_command: stderr: #{rc[1]}")
+  # Evaluate the remote guards
+  #
+  # Execute the not_if_remote and only_if_remote guards (if applicable) on all
+  # servers in the given session.
+  #
+  # Return the list of servers which have *not* been filtered out by the guards.
+  #
+  # If a server fails to connects, an exception is raised.
+  def evaluate_remote_guards(session)
+    remaining_servers = session.servers
+    remaining_servers = evaluate_single_remote_guard(session.on(*remaining_servers), :not_if_remote)
+    remaining_servers = evaluate_single_remote_guard(session.on(*remaining_servers), :only_if_remote)
+    remaining_servers
+  end
+
+  # Evaluate a single remote guard and return the list of passed servers
+  #
+  # The `which_guard` argument determines which guard is evaluated, and it needs
+  # to be the property symbol. The evaluation of the command return code is
+  # adapted to the specific guard.
+  #
+  # Return a list of servers which have passed the guard check.
+  def evaluate_single_remote_guard(session, which_guard)
+    raise 'invalid guard type' unless [:not_if_remote, :only_if_remote].include?(which_guard)
+    return session.servers unless property_is_set?(which_guard)
+    guard_command_config = new_resource.send(which_guard)
+
+    passed_servers = filter_servers_by_result(session,
+                                              guard_command_config.fetch(:command),
+                                              request_pty: guard_command_config.fetch(:request_pty)
+                                             ) do |srv, result_item|
+      # this block needs to return true if we want to keep the server
+      check_result = result_item.ok?([0])
+      check_result = !check_result if which_guard == :not_if_remote
+      Chef::Log.debug("server #{srv} excluded in #{which_guard} with result #{result_item.inspect}") unless check_result
+      check_result
     end
-    return true if rc[2] == 0
-    false
+
+    # all servers filtered, early out
+    return [] if passed_servers.empty?
+
+    Chef::Log.debug("#{new_resource}: evaluated #{which_guard} guard #{formatter.masked_command(guard_command_config.fetch(:command), guard_command_config.fetch(:sensitive_command))}: remaining servers #{passed_servers.map(&:host)}")
+
+    passed_servers
   end
 
+  # Execute a command on all servers and filter the server list by the result.
+  #
+  # Needs a block. The block is passed the server and the result item (which is
+  # a hash which has :exit_code and :exit_status keys). The block is expected
+  # to return true for those servers which should be kept and false for those
+  # which should be excluded.
+  #
+  # Return the filtered list of servers.
+  def filter_servers_by_result(session, command, options)
+    result = ssh_exec(session, command, options)
+    raise_connection_errors(result)
+
+    # return only those servers for which the passed block returns true
+    result.map do |srv, result_item|
+      next srv if yield [srv, result_item]
+      nil
+    end.compact
+  end
+
+  # Set a key in hash to value if and only if the key is not already in hash.
+  #
+  # If the key is in hash and the value in the hash differs from the given
+  # value, an error is raised.
   def set_if_unset!(hash, key, property, value)
     if hash.key?(key)
       raise "conflicting values set for property #{property} and options key #{key}" if property_is_set?(property) && hash[key] != value
@@ -148,6 +194,46 @@ action_class do
     end
   end
 
+  # Policy function which describes how connection errors are handled.
+  #
+  # This counts the number of connection attempts and aborts the connection
+  # attempts when those are exceeded, after setting a "failed" flag on the
+  # affected server.
+  #
+  # The failed flag is later collected by the ssh_exec / ssh_exec_streamed
+  # functions and interpreted by raise_connection_errors.
+  #
+  # See also: Net::SSH::Multi::Session#on_error.
+  def error_handler(server)
+    server[:connection_attempts] ||= 0
+    server[:connection_attempts] += 1
+    if server[:connection_attempts] > new_resource.max_connection_retries
+      server[:connection_failed] = true
+      return
+    end
+    Chef::Log.warn("failed to connect via SSH to #{server}, re-trying ... (#{server[:connection_attempts]}/#{new_resource.max_connection_retries})")
+    throw :go, :retry
+  end
+
+  # Raise an exception if any of the result items in the first argument have the
+  # `connection_failed` flag set.
+  #
+  # In general, it is preferable to raise an error which lists all failed host
+  # instead of failing on the first one. This function is thus only used during
+  # guard processing.
+  def raise_connection_errors(result_items)
+    result_items.each do |srv, result_item|
+      raise "Failed to connect to #{srv.user}@#{srv.host}" if result_item.connection_failed
+    end
+  end
+
+  # Execute a block with an SSH session.
+  #
+  # Takes a block.
+  #
+  # A Net::SSH::Multi session is set up according to the resource’s properties
+  # and yielded to the block. The return value of the block is returned by this
+  # function.
   def ssh_session
     if property_is_set?(:options)
       options = new_resource.options.dup
@@ -163,25 +249,41 @@ action_class do
     end
 
     retval = nil
-    Net::SSH.start(new_resource.address,
-                   new_resource.user,
-                   options) do |session|
+    multi_options = {
+      on_error: proc { |server| error_handler(server) },
+    }
+    multi_options[:concurrent_connections] = new_resource.concurrent_connections if property_is_set?(:concurrent_connections)
+    Net::SSH::Multi.start(multi_options) do |session|
+      new_resource.address.each do |addr|
+        session.use addr, user: new_resource.user, **options
+      end
+
       retval = yield session
     end
     retval
   end
 
-  def masked_command(command, sensitive)
-    return '(suppressed sensitive command)' if sensitive
-    command
-  end
-
-  def exec_io(session, command, input: nil, request_pty: false)
+  # Execute a command on all hosts in a session, providing output and return
+  # codes.
+  #
+  # `on_complete` must be a Proc which is called with two arguments (the server
+  # and the a hash which has the :exit_code and the :exit_signal keys set) once
+  # the command completes on the remote server.
+  #
+  # Any pieces of output sent on stdout or stderr of the command are yielded
+  # to the passed block. The block receives three arguments: the channel object,
+  # the stream (either :stdout or :stderr) and the block of data received.
+  #
+  # This function does not do any line-buffering.
+  #
+  # Careful! This returns a Net::SSH::Multi::Channel, but invoking `wait` on it
+  # is not safe because of connection limits: if the server channel has not been
+  # instantiated yet, `wait` returns immediately.
+  def exec_io(session, command, on_complete, input: nil, request_pty: false)
     # Unfortunately, SSH does not allow passing an execv-like array and only
     # supports strings. So we have to do shell escaping and hope for the best...
     command = Shellwords.shelljoin(command) if command.is_a?(Array)
 
-    status_obj = {}
     session.open_channel do |channel|
       if request_pty
         channel.request_pty do |_ch, success|
@@ -192,11 +294,14 @@ action_class do
       channel.exec(command) do |_ch, success|
         raise 'failed to execute command in channel' unless success
 
+        # We receive either exit-status or exit-signal. exit-signal contains the
+        # name of the signal which the process received. exit-status contains
+        # the exit status as uint32.
         channel.on_request('exit-status') do |_ch, data|
-          status_obj[:exit_code] = data.read_long
+          on_complete.call(channel[:server], exit_code: data.read_long, exit_signal: nil)
         end
         channel.on_request('exit-signal') do |_ch, data|
-          status_obj[:exit_signal] = data.read_long
+          on_complete.call(channel[:server], exit_code: false, exit_signal: data.read_string)
         end
 
         channel.on_data do |ch2, data|
@@ -211,10 +316,13 @@ action_class do
         # Always send EOF to prevent things from getting stuck unintentionally.
         channel.eof!
       end
-    end.wait
-    [status_obj[:exit_code], status_obj[:exit_signal]]
+    end
   end
 
+  # Extract lines (separated by \n) from a buffer, in place, and yield the lines
+  # to the passed block one by one (including the trailing newline).
+  #
+  # If a line exceeds the max_line_length, it is yielded even without newline.
   def extract_lines!(buffer)
     # note that this modifies buffer in-place for efficiency
     newline_pos = buffer.index("\n")
@@ -232,29 +340,151 @@ action_class do
     # rubocop:enable Style/GuardClause
   end
 
-  def line_buffered_exec(session, command, options)
+  # Wrapper around ssh_exec which implements line buffering.
+  #
+  # Like exec_io, this yields the output to the passed block with three
+  # arguments: the channel, the stream (:stdout or :stderr) and the line. Lines
+  # are emitted including the trailing newline, if it exists.
+  #
+  # Once the command completes, any unfinished lines are yielded to the block
+  # (and those may not have a trailing newline).
+  #
+  # All arguments and return values behave the same as for exec_io.
+  def line_buffered_exec(session, command, on_complete, options)
     # general idea: append data received via SSH to the respective buffers, and
     # flush the buffers to the passed block whenever a newline is encountered
-    buffers = { stdout: '', stderr: '' }
+    server_state = {}
+    session.servers.each do |srv|
+      server_state[srv] = {
+        buffers: {
+          stdout: '',
+          stderr: '',
+        },
+        channel: nil,
+      }
+    end
+
+    nested_on_complete = lambda do |server, result|
+      state = server_state[server]
+      channel = state.fetch(:channel)
+      state.fetch(:buffers).each_pair do |stream, remainder|
+        next if remainder.empty?
+        yield channel, stream, remainder
+      end
+      on_complete.call(server, result)
+    end
 
     # FIXME: intelligently deal with ANSI escape codes like colour changes.
-    exit_code, exit_signal = exec_io(session, command, options) do |_channel, stream, data|
+    exec_io(session, command, nested_on_complete, options) do |event_channel, stream, data|
+      this_state = server_state[event_channel[:server]]
+      this_state[:channel] = event_channel
+      buffers = this_state[:buffers]
       next unless buffers.key?(stream)
       buffer = buffers[stream]
       buffer << data
       extract_lines!(buffer) do |line|
-        yield stream, line
+        yield this_state[:channel], stream, line
+      end
+    end
+  end
+
+  # Boilerplate wrapper for executing a command on all servers in a session and
+  # collecting the results.
+  #
+  # Creates a hash mapping the servers to freshly created instances of
+  # result_item_class. The hash is then passed to the block. After the block
+  # returns, the session is looped until all servers have completed. The
+  # connection falied flag from the servers is transferred to the result items
+  # and the hash of result items is returned.
+  def loop_wrapper(session, result_item_class)
+    servers = session.servers
+    result_items = servers.map do |srv|
+      srv[:connection_failed] = nil
+      [srv, result_item_class.new]
+    end.to_h
+
+    yield result_items
+
+    session.master.loop do
+      servers.any? do |srv|
+        !result_items[srv].completed? && srv[:connection_failed].nil?
       end
     end
 
-    buffers.each_pair do |stream, remainder|
-      next if remainder.empty?
-      yield stream, remainder
+    servers.each do |srv|
+      unless srv[:connection_failed].nil?
+        result_items[srv].connection_failed = true
+      end
+      srv[:connection_failed] = nil
     end
 
-    [exit_code, exit_signal]
+    result_items
   end
 
+  # Execute a command on all hosts and stream the output to standard output,
+  # prefixed with the respective server name.
+  #
+  # Uses line_buffered_exec internally, to which all additional keyword
+  # arguments are passed.
+  #
+  # If sensitive_output is true, only the number of lines emitted by the command
+  # is printed (for each host) after it has completed.
+  #
+  # If sensitive_command is true, the command name is not printed when the exit
+  # status is printed after command completion.
+  #
+  # This waits until all hosts in the session have completed or failed to
+  # connect.
+  #
+  # Return a hash which maps the server objects to the result items for the
+  # server.
+  def ssh_exec_streamed(session, command, sensitive_command: false, sensitive_output: false, **options)
+    lines_by_host = {}
+    final_items = loop_wrapper(session, RemoteExec::ResultItem) do |result_items|
+      previous_host = nil
+
+      on_complete = lambda do |server, result|
+        result_item = result_items[server]
+        result_item.exit_code = result[:exit_code]
+        result_item.exit_signal = result[:exit_signal]
+        # make sure to always have an empty line in front of this output
+        puts if previous_host.nil?
+        previous_host = server
+        puts formatter.streamed_exit_status(server.host, command, sensitive_command, result_item)
+      end
+
+      line_buffered_exec(session, command, on_complete, options) do |channel, _stream, line|
+        line.slice!(line.length - 1) if line.end_with?("\n")
+        this_host = channel[:server]
+        lines_by_host[this_host] ||= 0
+        lines_by_host[this_host] += 1
+        unless sensitive_output
+          # print an empty line before the first line for alignment (but only
+          # if we actually receive output) and between different hosts for
+          # readability
+          puts if previous_host != this_host
+          previous_host = this_host
+          # Add the CLEAR to clear any color codes the remote end may have
+          # sent.
+          puts formatter.remote_output_line(this_host.host, line)
+        end
+      end
+    end
+
+    if sensitive_output
+      # no output was shown before, insert a blank line for alignment
+      puts
+      lines_by_host.sort.each do |server, nlines|
+        puts formatter.suppressed_remote_lines(server.host, nlines)
+      end
+      puts '(disable suppression of sensitive output by setting sensitive_output to false or :guards)'
+    end
+
+    final_items
+  end
+
+  # Append to a buffer and discard old content if it exceeds the maximum
+  # buffer size.
   def append_ringbuffer!(buffer, data)
     buffer += data
     return unless buffer.length > new_resource.max_buffer_size
@@ -262,15 +492,23 @@ action_class do
     buffer.slice!(0..to_cut)
   end
 
+  # Like ssh_exec_streamed, but instead of writing the output to standard
+  # output immediately, this collects the output in the stdout and stderr
+  # attributes of the result items.
+  #
+  # This also uses exec_io directly instead of adding line buffering, for
+  # performance.
   def ssh_exec(session, command, options)
-    stdout_data = ''
-    stderr_data = ''
-    exit_code, exit_signal = exec_io(session,
-                                     command,
-                                     options) do |_channel, stream, data|
-      append_ringbuffer!(stderr_data, data) if stream == :stderr
-      append_ringbuffer!(stdout_data, data) if stream == :stdout
+    loop_wrapper(session, RemoteExec::ResultItemWithIO) do |result_items|
+      on_complete = lambda do |server, result|
+        result_items[server].exit_code = result[:exit_code]
+        result_items[server].exit_signal = result[:exit_signal]
+      end
+
+      exec_io(session, command, on_complete, options) do |channel, stream, data|
+        srv = channel[:server]
+        append_ringbuffer!(result_items[srv].streams[stream], data)
+      end
     end
-    [stdout_data, stderr_data, exit_code, exit_signal]
   end
 end
