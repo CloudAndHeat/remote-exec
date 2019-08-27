@@ -23,5 +23,11 @@ module RemoteExec
         ':sensitive_command must be boolean' => ->(v) { v[:sensitive_command] == true || v[:sensitive_command] == false },
       }
     end
+
+    def self.symbolize_options(options)
+      options.map do |key, value|
+        [key.to_sym, value]
+      end.to_h
+    end
   end
 end

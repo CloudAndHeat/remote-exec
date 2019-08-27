@@ -10,6 +10,10 @@ testfiles = [
   'notify-before-not_if_remote',
   'notify-before-only_if_remote',
   '$something',
+  'notify-before',
+  'notify-before-not_if_remote',
+  'notify-before-only_if_remote',
+  'via-private-key',
 ]
 
 testfiles.each do |f|
@@ -271,5 +275,16 @@ remote_execute 'cat' do
   user 'testuser'
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
+  stream_output false
+end
+
+# Check passing the private key via options
+remote_execute 'touch /tmp/via-private-key' do
+  user 'testuser'
+  address 'localhost'
+  options(
+    :keys => ['/root/.ssh/custom_id_rsa'],
+    :keys_only => true
+  )
   stream_output false
 end

@@ -46,3 +46,7 @@ end
 describe file('/tmp/only-if-array') do
   it { should exist }
 end
+
+describe file('/tmp/via-private-key') do
+  it { should exist }
+end

@@ -31,6 +31,7 @@ property :sensitive_command, [TrueClass, FalseClass], default: lazy { sensitive 
 property :stream_output, [TrueClass, FalseClass], default: true
 property :max_buffer_size, Integer, default: 1048576 # approx. 1 MiB
 property :max_line_length, Integer, default: 4096 # 4 kiB
+property :options, Hash, coerce: proc { |v| RemoteExec::Validation.symbolize_options(v) }
 
 property :not_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::Validation.coerce_guard_config(v, sensitive) }, callbacks: RemoteExec::Validation.guard_config_checks
 property :only_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::Validation.coerce_guard_config(v, sensitive) }, callbacks: RemoteExec::Validation.guard_config_checks
@@ -143,13 +144,32 @@ action_class do
     false
   end
 
+  def set_if_unset!(hash, key, property, value)
+    if hash.key?(key)
+      raise "conflicting values set for property #{property} and options key #{key}" if property_is_set?(property) && hash[key] != value
+    else
+      hash[key] = value
+    end
+  end
+
   def ssh_session
+    if property_is_set?(:options)
+      options = new_resource.options.dup
+      set_if_unset!(options, :password, :password, new_resource.password)
+      set_if_unset!(options, :non_interactive, :interactive, !new_resource.interactive)
+      set_if_unset!(options, :timeout, :timeout, new_resource.timeout)
+    else
+      options = {
+        timeout: new_resource.timeout,
+        non_interactive: !new_resource.interactive,
+        password: new_resource.password,
+      }
+    end
+
     retval = nil
     Net::SSH.start(new_resource.address,
                    new_resource.user,
-                   password: new_resource.password,
-                   timeout: new_resource.timeout,
-                   non_interactive: !new_resource.interactive) do |session|
+                   options) do |session|
       retval = yield session
     end
     retval
