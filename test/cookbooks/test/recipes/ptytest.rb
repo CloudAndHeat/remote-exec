@@ -6,6 +6,7 @@ remote_execute 'PTY positive true' do
   user 'testuser'
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
+  stream_output false
 end
 
 remote_execute 'PTY negative true' do
@@ -15,6 +16,7 @@ remote_execute 'PTY negative true' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   returns 1
+  stream_output false
 end
 
 remote_execute 'PTY positive default' do
@@ -22,6 +24,7 @@ remote_execute 'PTY positive default' do
   user 'testuser'
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
+  stream_output false
 end
 
 remote_execute 'PTY negative default' do
@@ -30,6 +33,7 @@ remote_execute 'PTY negative default' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   returns 1
+  stream_output false
 end
 
 # Check if PTY allocation for not_if_remote works
@@ -42,6 +46,7 @@ remote_execute 'not_if_remote PTY positive true' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if_remote command: 'test -t 0', request_pty: true
+  stream_output false
 end
 
 remote_execute 'not_if_remote PTY positive :guards' do
@@ -51,6 +56,7 @@ remote_execute 'not_if_remote PTY positive :guards' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if_remote command: 'test -t 0', request_pty: true
+  stream_output false
 end
 
 remote_execute 'not_if_remote PTY negative :command' do
@@ -61,6 +67,7 @@ remote_execute 'not_if_remote PTY negative :command' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if_remote command: 'test ! -t 0', request_pty: false
+  stream_output false
 end
 
 remote_execute 'not_if_remote PTY negative default' do
@@ -70,6 +77,7 @@ remote_execute 'not_if_remote PTY negative default' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if_remote command: 'test ! -t 0', request_pty: false
+  stream_output false
 end
 
 # Check if PTY allocation for only_if_remote works
@@ -82,6 +90,7 @@ remote_execute 'only_if_remote PTY positive true' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   only_if_remote command: 'test ! -t 0', request_pty: true
+  stream_output false
 end
 
 remote_execute 'only_if_remote PTY positive :guards' do
@@ -91,6 +100,7 @@ remote_execute 'only_if_remote PTY positive :guards' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   only_if_remote command: 'test ! -t 0', request_pty: true
+  stream_output false
 end
 
 remote_execute 'only_if_remote PTY negative :command' do
@@ -101,6 +111,7 @@ remote_execute 'only_if_remote PTY negative :command' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   only_if_remote command: 'test -t 0', request_pty: false
+  stream_output false
 end
 
 remote_execute 'only_if_remote PTY negative default' do
@@ -110,4 +121,5 @@ remote_execute 'only_if_remote PTY negative default' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   only_if_remote command: 'test -t 0', request_pty: false
+  stream_output false
 end

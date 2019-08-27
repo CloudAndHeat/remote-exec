@@ -42,6 +42,7 @@ remote_execute 'touch /tmp/foo' do
   user 'testuser'
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
+  stream_output false
 end
 
 # Check that a non-zero exit status can be masked via array
@@ -50,6 +51,7 @@ remote_execute 'false' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   returns [1]
+  stream_output false
 end
 
 # Check that a non-zero exit status can be masked via value
@@ -58,6 +60,7 @@ remote_execute 'false' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   returns 1
+  stream_output false
 end
 
 # Check that input can be passed to the remote; the inspec test will check the
@@ -76,6 +79,7 @@ remote_execute 'not_if_remote test' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if_remote '/usr/local/bin/is-local-ssh'
+  stream_output false
 end
 
 # This should be created, because the not_if script should only work on remote
@@ -85,6 +89,7 @@ remote_execute 'touch /tmp/not-if-smoke' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if '/usr/local/bin/is-local-ssh'
+  stream_output false
 end
 
 remote_execute 'touch /tmp/not-if-ok' do
@@ -92,6 +97,7 @@ remote_execute 'touch /tmp/not-if-ok' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   not_if_remote '/usr/local/bin/is-not-local-ssh'
+  stream_output false
 end
 
 remote_execute 'touch /tmp/only-if-ok' do
@@ -99,6 +105,7 @@ remote_execute 'touch /tmp/only-if-ok' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   only_if_remote '/usr/local/bin/is-local-ssh'
+  stream_output false
 end
 
 remote_execute 'only_if_remote test' do
@@ -107,6 +114,7 @@ remote_execute 'only_if_remote test' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   only_if_remote '/usr/local/bin/is-not-local-ssh'
+  stream_output false
 end
 
 # Check that both not_if_remote and only_if_remote are taken into account
@@ -118,6 +126,7 @@ remote_execute 'not_if_remote plus only_if_remote test variant 1' do
   address 'localhost'
   not_if_remote 'true' # forbids execution
   only_if_remote 'true'  # allows execution
+  stream_output false
 end
 
 remote_execute 'not_if_remote plus only_if_remote test variant 2' do
@@ -127,6 +136,7 @@ remote_execute 'not_if_remote plus only_if_remote test variant 2' do
   address 'localhost'
   not_if_remote 'false'  # allows execution
   only_if_remote 'false' # forbids execution
+  stream_output false
 end
 
 # Check that remote guard evaluation blocks notifications
@@ -200,6 +210,7 @@ remote_execute 'non-existant-command' do
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
   returns 127
+  stream_output false
 end
 
 # Check that action :nothing does nothing
@@ -209,6 +220,7 @@ remote_execute 'touch /tmp/should-not-exist' do
   user 'testuser'
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
+  stream_output false
 end
 
 # Check that arrays can be used as commands for safety against shells
@@ -259,4 +271,5 @@ remote_execute 'cat' do
   user 'testuser'
   password node['test-cookbook']['testuser']['password']
   address 'localhost'
+  stream_output false
 end
