@@ -31,6 +31,7 @@ remote_execute 'name' do
   live_stream       boolean         # default: false
   max_buffer_size   Integer         # default: 1 Mi (= 1048576)
   max_line_length   Integer         # default: 4 ki (= 4096)
+  options           Hash            #
 
   not_if_remote String, Array, Hash # Remotely executed shell guard command like not_if
   only_if_remote String, Array, Hash # Remotely executed shell guard command like only_if
@@ -118,6 +119,16 @@ The resource has the following properties:
 
   Note: This limit is a soft limit and may be exceeded by an amount equal to
   the buffer size of the network stack.
+
+* `options`: Options to pass to Net::SSH.start. These allow detailed
+  configuration of the SSH connection. Note that `timeout`, `password` and
+  `interactive` influence the same set of options. If any of those properties
+  are set and the value is also set in `options` and it differs, an error is
+  raised.
+
+  Otherwise, the property values are merged into the `options` (after
+  duplication). This allows to pass e.g. `password` through the (sensitive)
+  property instead of through the (non-sensitive) `options` hash.
 
 
 #### Guards
