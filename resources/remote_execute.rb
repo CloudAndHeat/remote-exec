@@ -18,7 +18,9 @@ resource_name :remote_execute
 default_action :run
 
 property :command, [String, Array], name_property: true, required: true
-property :returns, [Integer, Array], default: [0]
+property :returns, Array, default: [0], coerce: proc { |v| v.is_a?(Integer) ? [v] : v }, callbacks: {
+  'must be Array of Integers' => ->(a) { a.all? { |v| v.is_a?(Integer) } },
+}
 property :timeout, Integer, default: 60
 property :user, String
 property :password, String, sensitive: true
@@ -38,12 +40,6 @@ property :only_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::
 
 action :run do
   Chef::Log.debug('remote_execute.rb: action_run')
-
-  allowed_exit_codes = if new_resource.returns.is_a?(Array)
-                         new_resource.returns
-                       else
-                         [new_resource.returns]
-                       end
 
   command_options = {
     input: new_resource.input,
@@ -103,10 +99,10 @@ action :run do
                                                           command_options)
       end
 
-      success = allowed_exit_codes.include?(exit_code)
+      success = new_resource.returns.include?(exit_code)
       unless success
         error_parts = [
-          "Expected process to exit with #{allowed_exit_codes.inspect}, but received #{exit_code} (signal: #{exit_signal})",
+          "Expected process to exit with #{new_resource.returns.inspect}, but received #{exit_code} (signal: #{exit_signal})",
         ]
         if new_resource.sensitive_output
           error_parts.push(
