@@ -37,8 +37,7 @@ suites:
     driver:
       chef_version: 12
     run_list:
-      - recipe[test::sshd]
-      - recipe[test::exectest]
+      - recipe[test]
     verifier:
       inspec_tests:
         - test/recipes
@@ -48,8 +47,7 @@ suites:
     driver:
       chef_version: 13
     run_list:
-      - recipe[test::sshd]
-      - recipe[test::exectest]
+      - recipe[test]
     verifier:
       inspec_tests:
         - test/recipes
@@ -59,8 +57,7 @@ suites:
     driver:
       chef_version: 14
     run_list:
-      - recipe[test::sshd]
-      - recipe[test::exectest]
+      - recipe[test]
     verifier:
       inspec_tests:
         - test/recipes
