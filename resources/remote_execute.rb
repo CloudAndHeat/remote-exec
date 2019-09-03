@@ -117,6 +117,13 @@ action_class do
     @formatter ||= RemoteExec::Formatter.new
   end
 
+  def flatten_command(command)
+    # Unfortunately, SSH does not allow passing an execv-like array and only
+    # supports strings. So we have to do shell escaping and hope for the best...
+    return command if command.is_a?(String)
+    Shellwords.shelljoin(command)
+  end
+
   # Evaluate the remote guards
   #
   # Execute the not_if_remote and only_if_remote guards (if applicable) on all
@@ -280,9 +287,7 @@ action_class do
   # is not safe because of connection limits: if the server channel has not been
   # instantiated yet, `wait` returns immediately.
   def exec_io(session, command, on_complete, input: nil, request_pty: false)
-    # Unfortunately, SSH does not allow passing an execv-like array and only
-    # supports strings. So we have to do shell escaping and hope for the best...
-    command = Shellwords.shelljoin(command) if command.is_a?(Array)
+    command = flatten_command(command)
 
     session.open_channel do |channel|
       if request_pty
