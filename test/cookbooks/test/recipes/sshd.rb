@@ -26,3 +26,8 @@ file '/home/testuser/.ssh/authorized_keys' do
   group 'testuser'
   mode 0o600
 end
+
+sudo 'testuser' do
+  user 'testuser'
+  nopasswd true
+end

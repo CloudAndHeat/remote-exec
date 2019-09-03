@@ -50,6 +50,8 @@ property :concurrent_connections, Integer, callbacks: {
 property :max_connection_retries, Integer, default: 3
 property :print_summary, [TrueClass, FalseClass], default: lazy { address.length > 1 || !stream_output }
 
+property :become_user, String, default: lazy { user }
+
 property :not_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::Validation.coerce_guard_config(v, sensitive) }, callbacks: RemoteExec::Validation.guard_config_checks
 property :only_if_remote, [String, Array, Hash], coerce: proc { |v| RemoteExec::Validation.coerce_guard_config(v, sensitive) }, callbacks: RemoteExec::Validation.guard_config_checks
 
@@ -69,6 +71,12 @@ action :run do
     raise 'PTY requested for command execution, but input is given. The options are incompatible, as PTYs are not binary-safe.'
   end
 
+  prepared_command = prepare_command(
+    new_resource.command,
+    new_resource.user,
+    new_resource.become_user
+  )
+
   ssh_session do |session|
     remaining_servers = evaluate_remote_guards(session)
 
@@ -77,22 +85,22 @@ action :run do
     # be "changed". That, in turn, triggers unwanted notifications.
     break if remaining_servers.empty?
 
-    messages = ["execute #{formatter.masked_command(new_resource.command, new_resource.sensitive_command)} on server #{remaining_servers.map(&:host)} as #{new_resource.user.inspect}"]
+    messages = ["execute #{formatter.masked_command(prepared_command, new_resource.sensitive_command)} on server #{remaining_servers.map(&:host)} as #{new_resource.user.inspect}"]
     converge_by(messages) do
       subsession = session.on(*remaining_servers)
       result_items = if new_resource.stream_output
                        ssh_exec_streamed(subsession,
-                                         new_resource.command,
+                                         prepared_command,
                                          sensitive_output: new_resource.sensitive_output,
                                          sensitive_command: new_resource.sensitive_command,
                                          **command_options)
                      else
-                       ssh_exec(subsession, new_resource.command, command_options)
+                       ssh_exec(subsession, prepared_command, command_options)
                      end
 
       error_parts = formatter.compose_exception_message(
         result_items,
-        new_resource.command,
+        prepared_command,
         new_resource.sensitive_command,
         new_resource.sensitive_output,
         new_resource.returns
@@ -115,6 +123,14 @@ end
 action_class do
   def formatter
     @formatter ||= RemoteExec::Formatter.new
+  end
+
+  def prepare_command(command, login_user, become_user)
+    command = flatten_command(command)
+    if login_user != become_user
+      command = "sudo -u #{Shellwords.escape(become_user)} #{command}"
+    end
+    command
   end
 
   def flatten_command(command)
@@ -151,8 +167,14 @@ action_class do
     return session.servers unless property_is_set?(which_guard)
     guard_command_config = new_resource.send(which_guard)
 
+    prepared_command = prepare_command(
+      guard_command_config.fetch(:command),
+      new_resource.user,
+      guard_command_config[:become_user] || new_resource.become_user
+    )
+
     passed_servers = filter_servers_by_result(session,
-                                              guard_command_config.fetch(:command),
+                                              prepared_command,
                                               request_pty: guard_command_config.fetch(:request_pty)
                                              ) do |srv, result_item|
       # this block needs to return true if we want to keep the server
@@ -165,7 +187,7 @@ action_class do
     # all servers filtered, early out
     return [] if passed_servers.empty?
 
-    Chef::Log.debug("#{new_resource}: evaluated #{which_guard} guard #{formatter.masked_command(guard_command_config.fetch(:command), guard_command_config.fetch(:sensitive_command))}: remaining servers #{passed_servers.map(&:host)}")
+    Chef::Log.debug("#{new_resource}: evaluated #{which_guard} guard #{formatter.masked_command(prepared_command, guard_command_config.fetch(:sensitive_command))}: remaining servers #{passed_servers.map(&:host)}")
 
     passed_servers
   end

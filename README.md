@@ -35,6 +35,7 @@ remote_execute 'name' do
   concurrent_connections Integer    #
   max_connection_retries Integer    # default: 3
   print_summary     boolean         #
+  become_user       String          # default: user
 
   not_if_remote String, Array, Hash # Remotely executed shell guard command like not_if
   only_if_remote String, Array, Hash # Remotely executed shell guard command like only_if
@@ -159,6 +160,13 @@ The resource has the following properties:
   The default value is true if there is more than one target address given or
   if streaming of output is disabled, false otherwise.
 
+* `become_user`: Use `sudo` to change which user the command is run as.
+
+  If this differs from the `user`, `sudo -u` is used in front of the `command`.
+  The advantage over doing this externally to the resource is that it properly
+  handles commands passed as Array and users with shell metacharacters in their
+  user names.
+
 #### Guards
 
 ##### Synopsis
@@ -171,7 +179,8 @@ following keys:
     command: [String, Array],
     request_pty: [TrueClass, FalseClass],  # default: false
     sensitive_output: [TrueClass, FalseClass],  # default: sensitive
-    sensitive_command: [TrueClass, FalseClass]  # default: sensitive
+    sensitive_command: [TrueClass, FalseClass],  # default: sensitive
+    become_user: String  # default: login user of the resource
 }
 ```
 
@@ -187,6 +196,9 @@ If a string or array is given instead of a hash, the `value` is converted to
   otherwise.
 * `sensitive_command`: Whether to suppress printing the guard command itself.
   The default is true if the resource is marked as sensitive, false otherwise.
+* `become_user`: Works like `become_user` on the main command; if unset,
+  defaults to the `become_user` of the resource. To disable privilege escalation
+  for the guard commands, explicitly set this to the `user` of the resource.
 
 ##### Description
 
