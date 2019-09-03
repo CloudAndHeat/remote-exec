@@ -15,6 +15,9 @@ testfiles = [
   'via-private-key',
   'multi-with-input',
   'multi-ssh-connection',
+  'privileged',
+  'privileged-guard-unconfigured',
+  'unprivileged-guard-privileged',
 ]
 
 testfiles.each do |f|
@@ -28,4 +31,5 @@ include_recipe 'test::notifications_and_guards'
 include_recipe 'test::ptytest'
 include_recipe 'test::arrays'
 include_recipe 'test::error_handling'
+include_recipe 'test::become_user'
 # include_recipe 'test::failing'

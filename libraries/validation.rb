@@ -12,7 +12,7 @@ module RemoteExec
     def self.guard_config_checks
       # :request_pty is defaulted in coerce
       required_keys = [:command, :request_pty, :sensitive_output, :sensitive_command]
-      allowed_keys = required_keys + []
+      allowed_keys = required_keys + [:become_user]
 
       {
         "must be Hash with keys #{required_keys}" => ->(v) { required_keys.all? { |key| v.key?(key) } },
@@ -21,6 +21,7 @@ module RemoteExec
         ':request_pty must be boolean' => ->(v) { v[:request_pty] == true || v[:request_pty] == false },
         ':sensitive_output must be boolean' => ->(v) { v[:sensitive_output] == true || v[:sensitive_output] == false },
         ':sensitive_command must be boolean' => ->(v) { v[:sensitive_command] == true || v[:sensitive_command] == false },
+        ':become_user must be a String' => ->(v) { !v.key?(:become_user) || v[:become_user].is_a?(String) },
       }
     end
 

@@ -1,5 +1,7 @@
 describe file('/tmp/foo') do
   it { should exist }
+  its('owner') { should eq 'testuser' }
+  its('group') { should eq 'testuser' }
 end
 
 describe file('/tmp/input') do
@@ -68,4 +70,28 @@ describe file('/tmp/multi-ssh-connection') do
   its('content') { should include '127.1.0.8' }
   its('content') { should_not include '127.1.0.9' }
   its('content') { should_not include '127.1.0.10' }
+end
+
+describe file('/tmp/privileged') do
+  it { should exist }
+  its('owner') { should eq 'root' }
+  its('group') { should eq 'root' }
+end
+
+describe file('/tmp/privileged-guard-unconfigured') do
+  it { should exist }
+  its('owner') { should eq 'root' }
+  its('group') { should eq 'root' }
+end
+
+describe file('/tmp/unprivileged-guard-privileged') do
+  it { should exist }
+  its('owner') { should eq 'root' }
+  its('group') { should eq 'root' }
+end
+
+describe file('/tmp/privileged-guard-unprivileged') do
+  it { should exist }
+  its('owner') { should eq 'testuser' }
+  its('group') { should eq 'testuser' }
 end
